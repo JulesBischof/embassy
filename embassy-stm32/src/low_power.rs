@@ -182,6 +182,8 @@ mod platform {
             crate::pac::PWR.cr().modify(|w| {
                 w.set_pdds(Pdds::STOP_MODE);
                 w.set_cwuf(true);
+                w.set_ulp(true);
+                w.set_lpsdsr(stm32_metapac::pwr::vals::Mode::LOW_POWER_MODE);
             });
         }
 
