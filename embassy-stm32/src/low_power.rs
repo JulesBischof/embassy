@@ -26,10 +26,11 @@
 
 use core::mem;
 use core::sync::atomic::{AtomicBool, Ordering, compiler_fence};
-
+use cortex_m::interrupt::Mutex;
 use cortex_m::peripheral::SCB;
-use critical_section::CriticalSection;
+use critical_section::{CriticalSection, with};
 
+use crate::dma::info;
 #[cfg(all(feature = "rt", not(feature = "_lp-time-driver")))]
 use crate::interrupt;
 pub use crate::rcc::StopMode;
@@ -178,13 +179,28 @@ mod platform {
 
         #[cfg(stm32l0)]
         {
+
             use crate::pac::pwr::vals::Pdds;
             crate::pac::PWR.cr().modify(|w| {
-                w.set_pdds(Pdds::STOP_MODE);
+                w.set_pdds(Pdds::STOP_MODE);// STANDBY_MODE
                 w.set_cwuf(true);
-                w.set_ulp(true);
-                w.set_lpsdsr(stm32_metapac::pwr::vals::Mode::LOW_POWER_MODE);
+                w.set_ulp(true); // ref (page 151, RM0376)
+                w.set_lpsdsr(stm32_metapac::pwr::vals::Mode::LOW_POWER_MODE); // ref (page 168, RM0376)
+                w.set_fwu(true); // fast wakeup https://forum.digikey.com/t/low-power-modes-on-the-stm32l0-series/13306
             });
+
+            // set the MSI16 as wake-up from stop clock
+            crate::pac::RCC.cfgr().modify(|w| 
+            {
+                w.set_stopwuck(stm32_metapac::rcc::vals::Stopwuck::MSI);
+            });
+
+            // crate::pac::ADC1.cr().modify(|w| {
+            //     w.set_addis(true);
+            // });
+            // crate::pac::DAC1.cr().modify(|w| {
+            //     w.set_en(1, false);
+            // });
         }
 
         #[cfg(stm32wb)]
@@ -344,7 +360,11 @@ fn configure_pwr(cs: CriticalSection) {
         unsafe { mem::transmute(()) }
     }
 
-    get_scb().clear_sleepdeep();
+    // get_scb().clear_sleepdeep();
+    unsafe 
+    {
+        cortex_m::Peripherals::steal().SCB.clear_sleepdeep();
+    }
     platform::clear_flags();
 
     compiler_fence(Ordering::Acquire);
@@ -366,7 +386,11 @@ fn configure_pwr(cs: CriticalSection) {
         STOP_ENTERED.store(true, Ordering::Release);
 
         #[cfg(not(feature = "low-power-debug-with-sleep"))]
-        get_scb().set_sleepdeep();
+        // get_scb().set_sleepdeep();
+        unsafe 
+        {
+            cortex_m::Peripherals::steal().SCB.set_sleepdeep();
+        }
     }
 }
 
@@ -385,14 +409,154 @@ fn configure_pwr(cs: CriticalSection) {
 pub unsafe fn sleep(cs: CriticalSection) {
     configure_pwr(cs);
 
+    let scb_scr;
+    unsafe 
+    {
+        scb_scr = cortex_m::Peripherals::steal().SCB.scr.read();
+    }
+
+    let pwr_cr = crate::pac::PWR.cr().read();
+    let exti_pr = crate::pac::EXTI.pr(0).read();
+    
+    info!("---- START REGISTER DUMP ---- \n");
+
+    info!("SCB_SCR: {:x}", scb_scr);
+    info!("PWR_CR: {:x}", pwr_cr);
+    info!("EXTI_PR: {:x}", exti_pr);
+
+    info!("---- END REGISTER DUMP ---- \n");
+
     #[cfg(feature = "low-power-defmt-flush")]
     defmt::flush();
 
+    store_gpio_context();
+    put_all_gpios_into_analog();
+
     cortex_m::asm::dsb();
     cortex_m::asm::wfi();
+
+    recover_gpio_context();
 
     cortex_m::asm::isb();
     cortex_m::asm::dsb();
 
     on_wakeup(cs);
+}
+
+
+use stm32_metapac::gpio::Gpio;
+use stm32_metapac::gpio::regs::{Afr, Lckr, Moder, Odr, Ospeedr, Otyper, Pupdr};
+use core::cell::RefCell;
+
+struct GpioContext
+{
+    moder: Moder,
+    otyper: Otyper,
+    ospeedr: Ospeedr,
+    pupdr: Pupdr,
+    odr: Odr,
+    lckr: Lckr,
+    afrl: Afr,
+    afrh: Afr,
+}
+
+impl GpioContext
+{
+    fn from_peripheral(gpio: Gpio) -> GpioContext
+    {
+        GpioContext { 
+            moder: gpio.moder().read(),
+            otyper: gpio.otyper().read(), 
+            ospeedr: gpio.ospeedr().read(), 
+            pupdr: gpio.pupdr().read(), 
+            odr: gpio.odr().read(), 
+            lckr: gpio.lckr().read(),
+            afrl: gpio.afr(0).read(), 
+            afrh: gpio.afr(1).read(), 
+            }
+    }
+
+    fn into_peripheral(&self, gpio: Gpio)
+    {
+        gpio.moder().write_value(self.moder);
+        gpio.otyper().write_value(self.otyper);
+        gpio.ospeedr().write_value(self.ospeedr);
+        gpio.pupdr().write_value(self.pupdr);
+        gpio.odr().write_value(self.odr);
+        gpio.lckr().write_value(self.lckr);
+        gpio.afr(0).write_value(self.afrl);
+        gpio.afr(1).write_value(self.afrh);
+    }
+
+    pub const fn new() -> GpioContext {
+        Self { moder: Moder(0), otyper: Otyper(0), ospeedr: Ospeedr(0), pupdr: Pupdr(0), odr: Odr(0), lckr: Lckr(0), afrl: Afr(0), afrh: Afr(0) }
+    }
+}
+
+static CONTEXT_GPIOA: Mutex<RefCell<GpioContext>> = Mutex::new(RefCell::new(GpioContext::new()));
+static CONTEXT_GPIOB: Mutex<RefCell<GpioContext>> = Mutex::new(RefCell::new(GpioContext::new()));
+static CONTEXT_GPIOC: Mutex<RefCell<GpioContext>> = Mutex::new(RefCell::new(GpioContext::new()));
+static CONTEXT_GPIOD: Mutex<RefCell<GpioContext>> = Mutex::new(RefCell::new(GpioContext::new()));
+static CONTEXT_GPIOE: Mutex<RefCell<GpioContext>> = Mutex::new(RefCell::new(GpioContext::new()));
+static CONTEXT_GPIOH: Mutex<RefCell<GpioContext>> = Mutex::new(RefCell::new(GpioContext::new()));
+
+fn store_gpio_context() {
+    cortex_m::interrupt::free(|cs| {
+        *CONTEXT_GPIOA.borrow(cs).borrow_mut() =
+            GpioContext::from_peripheral(crate::pac::GPIOA);
+        *CONTEXT_GPIOB.borrow(cs).borrow_mut() =
+            GpioContext::from_peripheral(crate::pac::GPIOB);
+        *CONTEXT_GPIOC.borrow(cs).borrow_mut() =
+            GpioContext::from_peripheral(crate::pac::GPIOC);
+        *CONTEXT_GPIOD.borrow(cs).borrow_mut() =
+            GpioContext::from_peripheral(crate::pac::GPIOD);
+        *CONTEXT_GPIOE.borrow(cs).borrow_mut() =
+            GpioContext::from_peripheral(crate::pac::GPIOE);
+        *CONTEXT_GPIOH.borrow(cs).borrow_mut() =
+            GpioContext::from_peripheral(crate::pac::GPIOH);
+    });
+}
+
+fn recover_gpio_context() {
+    cortex_m::interrupt::free(|cs| {
+        CONTEXT_GPIOA
+            .borrow(cs)
+            .borrow()
+            .into_peripheral(crate::pac::GPIOA);
+
+        CONTEXT_GPIOB
+            .borrow(cs)
+            .borrow()
+            .into_peripheral(crate::pac::GPIOB);
+
+        CONTEXT_GPIOC
+            .borrow(cs)
+            .borrow()
+            .into_peripheral(crate::pac::GPIOC);
+
+        CONTEXT_GPIOD
+            .borrow(cs)
+            .borrow()
+            .into_peripheral(crate::pac::GPIOD);
+
+        CONTEXT_GPIOE
+            .borrow(cs)
+            .borrow()
+            .into_peripheral(crate::pac::GPIOE);
+
+        CONTEXT_GPIOH
+            .borrow(cs)
+            .borrow()
+            .into_peripheral(crate::pac::GPIOH);
+    });
+}
+
+fn put_all_gpios_into_analog()
+{
+    crate::pac::GPIOA.moder().write_value(Moder(0xEBFF_FCFF)); // 0xEBFF_FCFF - reset value!
+    crate::pac::GPIOB.moder().write_value(Moder(0xFFFF_FFFF));
+    crate::pac::GPIOC.moder().write_value(Moder(0xFFFF_FFFF));
+    crate::pac::GPIOD.moder().write_value(Moder(0xFFFF_FFFF));
+    crate::pac::GPIOE.moder().write_value(Moder(0xFFFF_FFFF));
+    crate::pac::GPIOH.moder().write_value(Moder(0xFFFF_FFFF));
 }
