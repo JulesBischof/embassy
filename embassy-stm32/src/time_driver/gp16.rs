@@ -13,6 +13,7 @@ use embassy_time_queue_utils::Queue;
 use stm32_metapac::timer::TimGp16;
 #[cfg(feature = "rt")]
 use stm32_metapac::timer::regs;
+use stm32_metapac::timer::regs::Ccr1ch;
 
 use super::AlarmState;
 use crate::interrupt::typelevel::Interrupt;
@@ -117,6 +118,17 @@ impl RtcDriver {
     pub(crate) fn init_timer(&'static self, cs: critical_section::CriticalSection) {
         let r = regs_gp16();
 
+        // figure out, if any alarm is pending
+        let dier =  r.dier().read();
+        let mut alarm_ccr = None;
+        let mut pre_reset_cnt = None;
+        let n = 0;
+        if dier.ccie(n + 1) // 1 is the embassy's alarm - channel 
+        {
+            alarm_ccr = Some(r.ccr(n+1).read());
+            pre_reset_cnt = Some(r.cnt().read());
+        }
+
         rcc::enable_and_reset_with_cs::<T>(cs);
 
         let timer_freq = T::frequency();
@@ -146,6 +158,14 @@ impl RtcDriver {
             w.set_uie(true);
             w.set_ccie(0, true);
         });
+
+        // if an alarm was pending - resume the alarm
+        if let Some(ccr) = alarm_ccr && let Some(cnt) = pre_reset_cnt
+        {
+            r.ccr(n+1).write_value(ccr); // set previous alarm
+            r.cnt().write_value(cnt); // resume to current period counter
+            r.dier().modify(|w| {w.set_ccie(n+1, true);}); // reenable interrupts
+        }
 
         <T as GeneralInstance1Channel>::CaptureCompareInterrupt::unpend();
         <T as CoreInstance>::UpdateInterrupt::unpend();
