@@ -56,6 +56,11 @@ pub(crate) static mut REFCOUNT_STOP2: u32 = 0;
 #[cfg(all(feature = "low-power", not(feature = "_dual-core")))]
 pub(crate) static mut RCC_CONFIG: Option<Config> = None;
 
+#[cfg(all(feature = "low-power-use-low-power-sleep", not(feature = "_dual-core")))]
+pub(crate) static mut GEARSHIFT_FAST_RCC_CONFIG: Option<Config> = None;
+#[cfg(all(feature = "low-power-use-low-power-sleep", not(feature = "_dual-core")))]
+pub(crate) static mut GEARSHIFT_SLOW_RCC_CONFIG: Option<Config> = None;
+
 #[cfg(all(feature = "low-power", feature = "_dual-core"))]
 static RCC_CONFIG_PTR: core::sync::atomic::AtomicPtr<MaybeUninit<Option<Config>>> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
@@ -121,6 +126,18 @@ pub(crate) unsafe fn get_rcc_config() -> Option<Config> {
     RCC_CONFIG
 }
 
+#[cfg(all(feature = "low-power-use-low-power-sleep", not(feature = "_dual-core")))]
+/// Safety: Reads a mutable global.
+pub(crate) unsafe fn get_gearshift_rcc_config_slow() -> Option<Config> {
+    GEARSHIFT_SLOW_RCC_CONFIG
+}
+
+#[cfg(all(feature = "low-power-use-low-power-sleep", not(feature = "_dual-core")))]
+/// Safety: Reads a mutable global.
+pub(crate) unsafe fn get_gearshift_rcc_config_fast() -> Option<Config> {
+    GEARSHIFT_FAST_RCC_CONFIG
+}
+
 #[cfg(all(feature = "low-power", feature = "_dual-core"))]
 /// Safety: Reads a mutable global.
 pub(crate) unsafe fn get_rcc_config() -> Option<Config> {
@@ -131,6 +148,15 @@ pub(crate) unsafe fn get_rcc_config() -> Option<Config> {
 /// Safety: Sets a mutable global.
 unsafe fn set_rcc_config(config: Option<Config>) {
     RCC_CONFIG = config;
+}
+
+#[cfg(all(feature = "low-power-use-low-power-sleep", not(feature = "_dual-core")))]
+/// Safety: Sets a mutable global.
+unsafe fn set_gearshift_rcc_configs(rcc_slow: Option<Config>, rcc_fast: Option<Config>) {
+    assert!( (rcc_slow.is_some() && rcc_fast.is_some()) || 
+             (rcc_slow.is_none() && rcc_fast.is_none()) );
+    GEARSHIFT_SLOW_RCC_CONFIG = rcc_slow;
+    GEARSHIFT_FAST_RCC_CONFIG = rcc_fast;
 }
 
 #[cfg(all(feature = "low-power", feature = "_dual-core"))]
@@ -775,6 +801,38 @@ pub(crate) fn init_rcc(_cs: CriticalSection, config: Config) {
         #[cfg(feature = "low-power")]
         set_rcc_config(Some(config));
     }
+}
+
+/// sets the rcc config, that gets enabled right before entering low power sleep 
+/// modes in order to perform some gearshifting
+#[cfg(feature = "low-power-use-low-power-sleep")]
+pub(crate) fn init_gearshift_rcc(_: CriticalSection, rcc_slow: Config, rcc_fast: Config)
+{
+    unsafe{set_gearshift_rcc_configs(Some(rcc_slow), Some(rcc_fast));}
+}
+
+use crate::time_driver::update_frequency;
+
+#[cfg(feature = "low-power-use-low-power-sleep")]
+pub(crate) fn gearshift_slow(cs: CriticalSection)
+{
+    if let Some(c) = unsafe{get_gearshift_rcc_config_slow()}
+    {
+        init_rcc(cs, c);
+        update_frequency(cs);
+    }
+    info!("performed gearshift to slow");
+}
+
+#[cfg(feature = "low-power-use-low-power-sleep")]
+pub(crate) fn gearshift_fast(cs: CriticalSection)
+{
+    if let Some(c) = unsafe{get_gearshift_rcc_config_fast()}
+    {
+        init_rcc(cs, c);
+        update_frequency(cs);
+    }
+    info!("performed gearshift to fast");
 }
 
 /// Calculate intermediate prescaler number used to calculate peripheral prescalers
