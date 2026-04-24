@@ -3,17 +3,18 @@
 #[cfg(feature = "low-power")]
 use core::cell::Cell;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicU32, Ordering, compiler_fence};
+use core::sync::atomic::{AtomicU32, AtomicBool, Ordering, compiler_fence};
 
 use critical_section::CriticalSection;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_time_driver::{Driver, TICK_HZ};
+#[cfg(feature = "low-power")]
+use embassy_time::Duration;
+use embassy_time_driver::{Driver, TICK_HZ, now};
 use embassy_time_queue_utils::Queue;
 use stm32_metapac::timer::TimGp16;
 #[cfg(feature = "rt")]
 use stm32_metapac::timer::regs;
-use stm32_metapac::timer::regs::Ccr1ch;
 
 use super::AlarmState;
 use crate::interrupt::typelevel::Interrupt;
@@ -118,17 +119,6 @@ impl RtcDriver {
     pub(crate) fn init_timer(&'static self, cs: critical_section::CriticalSection) {
         let r = regs_gp16();
 
-        // figure out, if any alarm is pending
-        let dier =  r.dier().read();
-        let mut alarm_ccr = None;
-        let mut pre_reset_cnt = None;
-        let n = 0;
-        if dier.ccie(n + 1) // 1 is the embassy's alarm - channel 
-        {
-            alarm_ccr = Some(r.ccr(n+1).read());
-            pre_reset_cnt = Some(r.cnt().read());
-        }
-
         rcc::enable_and_reset_with_cs::<T>(cs);
 
         let timer_freq = T::frequency();
@@ -159,14 +149,6 @@ impl RtcDriver {
             w.set_ccie(0, true);
         });
 
-        // if an alarm was pending - resume the alarm
-        if let Some(ccr) = alarm_ccr && let Some(cnt) = pre_reset_cnt
-        {
-            r.ccr(n+1).write_value(ccr); // set previous alarm
-            r.cnt().write_value(cnt); // resume to current period counter
-            r.dier().modify(|w| {w.set_ccie(n+1, true);}); // reenable interrupts
-        }
-
         <T as GeneralInstance1Channel>::CaptureCompareInterrupt::unpend();
         <T as CoreInstance>::UpdateInterrupt::unpend();
         unsafe {
@@ -178,7 +160,44 @@ impl RtcDriver {
         }
     }
 
-    fn init(&'static self, cs: CriticalSection) {
+    pub(crate) fn update_frequency(&'static self, _: CriticalSection)
+    {
+        let r = regs_gp16();
+        let timer_freq = T::frequency();
+
+        // old counter value
+        let counter_before = r.cnt().read();
+
+        // disable timer
+        r.cr1().modify(|w| w.set_cen(false));
+
+        // calc new prescaler
+        let psc = timer_freq.0 / TICK_HZ as u32 - 1;
+        let psc: u16 = match psc.try_into() {
+            Err(_) => panic!("psc division overflow: {}", psc),
+            Ok(n) => n,
+        };
+
+        // write the prescaler
+        r.psc().write_value(psc);
+        r.arr().write(|w| w.set_arr(u16::MAX));
+
+        // force update shadow registers
+        r.cr1().modify(|w| w.set_urs(vals::Urs::COUNTER_ONLY));
+        r.egr().write(|w| w.set_ug(true));
+        r.cr1().modify(|w| w.set_urs(vals::Urs::ANY_EVENT));
+
+        // clear pending update flag due to the previous force update
+        <T as CoreInstance>::UpdateInterrupt::unpend();
+
+        // write and enable the counter
+        r.cnt().write_value(counter_before);
+        r.cr1().modify(|w| w.set_cen(true));
+    }
+
+
+    fn init(&'static self, cs: CriticalSection) 
+    {
         self.init_timer(cs);
         regs_gp16().cr1().modify(|w| w.set_cen(true));
     }
@@ -308,8 +327,8 @@ impl RtcDriver {
 impl super::LPTimeDriver for RtcDriver {
     fn time_until_next_alarm(&self, cs: CriticalSection) -> embassy_time::Duration {
         let now = self.now() + 32;
-
-        embassy_time::Duration::from_ticks(self.alarm.borrow(cs).timestamp.get().saturating_sub(now))
+        let alarm = self.alarm.borrow(cs).timestamp.get();
+        embassy_time::Duration::from_ticks(alarm.saturating_sub(now))
     }
 
     fn set_min_stop_pause(&self, cs: CriticalSection, min_stop_pause: embassy_time::Duration) {
@@ -326,6 +345,7 @@ impl super::LPTimeDriver for RtcDriver {
         assert!(regs_gp16().cr1().read().cen());
 
         let time_until_next_alarm = self.time_until_next_alarm(cs);
+
         if time_until_next_alarm < self.min_stop_pause.borrow(cs).get() {
             trace!(
                 "time_until_next_alarm < self.min_stop_pause ({})",
@@ -393,4 +413,8 @@ pub(crate) const fn get_driver() -> &'static RtcDriver {
 
 pub(crate) fn init(cs: CriticalSection) {
     DRIVER.init(cs)
+}
+
+pub(crate) fn update_frequency(cs: CriticalSection) {
+    DRIVER.update_frequency(cs)
 }
