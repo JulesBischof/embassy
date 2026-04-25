@@ -168,6 +168,9 @@ impl RtcDriver {
         // old counter value
         let counter_before = r.cnt().read();
 
+        // get previous drivers state (only reenable if it has been enabled before)
+        let cen = r.cr1().read().cen();
+
         // disable timer
         r.cr1().modify(|w| w.set_cen(false));
 
@@ -190,9 +193,9 @@ impl RtcDriver {
         // clear pending update flag due to the previous force update
         <T as CoreInstance>::UpdateInterrupt::unpend();
 
-        // write and enable the counter
+        // write and enable the counter (if neccessary)
         r.cnt().write_value(counter_before);
-        r.cr1().modify(|w| w.set_cen(true));
+        r.cr1().modify(|w| w.set_cen(cen));
     }
 
 
