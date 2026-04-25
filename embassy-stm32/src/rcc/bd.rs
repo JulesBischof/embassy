@@ -12,6 +12,8 @@ use crate::time::Hertz;
 pub const LSI_FREQ: Hertz = Hertz(40_000);
 #[cfg(not(any(stm32f0, stm32f1, stm32f3)))]
 pub const LSI_FREQ: Hertz = Hertz(32_000);
+#[cfg(stm32l0)]
+pub const LSI_FREQ: Hertz = Hertz(37_000);
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
