@@ -257,7 +257,7 @@ low-power = [ "time" ]
 low-power-debug-with-sleep = [ "low-power" ]
 low-power-defmt-flush = [ "defmt" ]
 low-power-use-low-power-sleep = [ "low-power" ]
-low-power-no-gpios-while-stop = [ "low-power", "low-power-use-low-power-sleep" ]
+low-power-idle-callbacks = [ "low-power" ]
 
 _executor = [ "dep:embassy-executor", "low-power" ]
 

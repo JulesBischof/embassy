@@ -282,6 +282,11 @@ pub struct Config {
     /// None if no Geatshifting shall be enabled
     pub gearshift_slow_rcc: rcc::Config,
 
+    #[cfg(feature = "low-power-idle-callbacks")]
+    pub pre_wfi_cb: Option<fn(cs: critical_section::CriticalSection<'_>, stop_entered: bool)>,
+    #[cfg(feature = "low-power-idle-callbacks")]
+    pub post_wfi_cb: Option<fn(cs: critical_section::CriticalSection<'_>, stop_entered: bool)>,
+
     #[cfg(feature = "low-power")]
     /// RTC config
     pub rtc: rtc::RtcConfig,
@@ -355,6 +360,10 @@ impl Default for Config {
             rcc: Default::default(),
             #[cfg(feature = "low-power-use-low-power-sleep")]
             gearshift_slow_rcc: Default::default(),
+            #[cfg(feature = "low-power-idle-callbacks")]
+            pre_wfi_cb: None,
+            #[cfg(feature = "low-power-idle-callbacks")]
+            post_wfi_cb: None,
             #[cfg(feature = "low-power")]
             rtc: Default::default(),
             #[cfg(feature = "low-power")]
@@ -742,6 +751,9 @@ fn init_hw(config: Config) -> Peripherals {
             // must be after time-driver init
             #[cfg(all(feature = "low-power", not(feature = "_lp-time-driver")))]
             rtc::init_rtc(cs, config.rtc, config.min_stop_pause);
+        
+            #[cfg(feature = "low-power-idle-callbacks")]
+            low_power::init_callbacks(config.pre_wfi_cb, config.post_wfi_cb, cs);
         }
 
         p
