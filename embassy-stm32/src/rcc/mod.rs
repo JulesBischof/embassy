@@ -814,9 +814,9 @@ pub(crate) fn init_gearshift_rcc(_: CriticalSection, rcc_slow: Config, rcc_fast:
 use crate::time_driver::update_frequency;
 
 #[cfg(feature = "low-power-use-low-power-sleep")]
-pub(crate) fn gearshift_slow(cs: CriticalSection)
+pub unsafe fn gearshift_slow(cs: CriticalSection)
 {
-    if let Some(c) = unsafe{get_gearshift_rcc_config_slow()}
+    if let Some(c) = get_gearshift_rcc_config_slow()
     {
         init_rcc(cs, c);
         update_frequency(cs);
@@ -825,9 +825,9 @@ pub(crate) fn gearshift_slow(cs: CriticalSection)
 }
 
 #[cfg(feature = "low-power-use-low-power-sleep")]
-pub(crate) fn gearshift_fast(cs: CriticalSection)
+pub unsafe fn gearshift_fast(cs: CriticalSection)
 {
-    if let Some(c) = unsafe{get_gearshift_rcc_config_fast()}
+    if let Some(c) = get_gearshift_rcc_config_fast()
     {
         init_rcc(cs, c);
         update_frequency(cs);

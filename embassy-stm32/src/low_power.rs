@@ -416,9 +416,6 @@ pub fn init_callbacks(pre_wfi_cb: Option<fn(cs: critical_section::CriticalSectio
 /// sleep as needed, but you might have to do it manually if you're using some peripherals
 /// with the PAC directly.
 pub unsafe fn sleep(cs: CriticalSection) {
-    #[cfg(feature = "low-power-use-low-power-sleep")]
-    crate::rcc::gearshift_slow(cs);
-
     let mode_is_stop = configure_pwr(cs);
 
     #[cfg(feature = "low-power-idle-callbacks")]
@@ -436,12 +433,10 @@ pub unsafe fn sleep(cs: CriticalSection) {
 
     on_wakeup(cs);
 
+    // run callback after time has been restord ( resume_time() )
     #[cfg(feature = "low-power-idle-callbacks")]
     if let Some(cb) = *POST_WFI_CB.borrow(cs).borrow()
     {
         cb(cs, mode_is_stop);
     }
-
-    #[cfg(feature = "low-power-use-low-power-sleep")]
-    crate::rcc::gearshift_fast(cs);
 }
