@@ -359,8 +359,6 @@ fn configure_pwr(cs: CriticalSection) -> bool {
     compiler_fence(Ordering::Acquire);
 
     let Some(stop_mode) = get_stop_mode(cs) else {
-        #[cfg(feature = "low-power-use-low-power-sleep")]
-        enter_low_power_sleep(cs);
         return false;
     };
 
@@ -381,14 +379,6 @@ fn configure_pwr(cs: CriticalSection) -> bool {
     };
 
     true
-}
-
-
-fn enter_low_power_sleep(_: CriticalSection)
-{
-    trace!("enter low-power-sleep!");
-    crate::pac::FLASH.acr().modify(|w| w.set_sleep_pd(true));
-    crate::pac::PWR.cr().modify(|w| w.lpsdsr());
 }
 
 #[cfg(feature = "low-power-idle-callbacks")]

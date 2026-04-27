@@ -277,7 +277,7 @@ pub struct Config {
     /// RCC config.
     pub rcc: rcc::Config,
 
-    #[cfg(feature = "low-power-use-low-power-sleep")]
+    #[cfg(feature = "low-power-allow-gearshifts")]
     /// Clock config during low power sleep in order to perform gearshifting
     /// None if no Geatshifting shall be enabled
     pub gearshift_slow_rcc: rcc::Config,
@@ -358,7 +358,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             rcc: Default::default(),
-            #[cfg(feature = "low-power-use-low-power-sleep")]
+            #[cfg(feature = "low-power-allow-gearshifts")]
             gearshift_slow_rcc: Default::default(),
             #[cfg(feature = "low-power-idle-callbacks")]
             pre_wfi_cb: None,
@@ -737,7 +737,7 @@ fn init_hw(config: Config) -> Peripherals {
 
             rcc::init_rcc(cs, config.rcc);
 
-            #[cfg(feature = "low-power-use-low-power-sleep")]
+            #[cfg(feature = "low-power-allow-gearshifts")]
             rcc::init_gearshift_rcc(cs, config.gearshift_slow_rcc, config.rcc);
 
             // must be before time_driver init to allow refcount reset
