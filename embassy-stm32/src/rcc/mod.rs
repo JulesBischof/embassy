@@ -811,6 +811,7 @@ pub(crate) fn init_gearshift_rcc(_: CriticalSection, rcc_slow: Config, rcc_fast:
     unsafe{set_gearshift_rcc_configs(Some(rcc_slow), Some(rcc_fast));}
 }
 
+#[cfg(feature = "low-power-allow-gearshifts")]
 use crate::time_driver::update_frequency;
 
 #[cfg(feature = "low-power-allow-gearshifts")]

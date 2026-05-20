@@ -26,16 +26,13 @@
 
 use core::mem;
 use core::sync::atomic::{AtomicBool, Ordering, compiler_fence};
-use cortex_m::interrupt::Mutex;
 use cortex_m::peripheral::SCB;
-use critical_section::{CriticalSection, with};
+use critical_section::CriticalSection;
 
-use crate::dma::info;
 #[cfg(all(feature = "rt", not(feature = "_lp-time-driver")))]
 use crate::interrupt;
-use crate::peripherals::RCC;
 pub use crate::rcc::StopMode;
-use crate::rcc::{LsConfig, get_stop_mode};
+use crate::rcc::get_stop_mode;
 use crate::time_driver::{LPTimeDriver, get_driver};
 
 use core::cell::RefCell;
@@ -381,11 +378,99 @@ fn configure_pwr(cs: CriticalSection) -> bool {
     true
 }
 
-#[cfg(feature = "low-power-idle-callbacks")]
-static PRE_WFI_CB : critical_section::Mutex<RefCell<Option<fn(cs: critical_section::CriticalSection<'_>, stop_entered :bool)>>> = critical_section::Mutex::new(RefCell::new(None));
-#[cfg(feature = "low-power-idle-callbacks")]
-static POST_WFI_CB : critical_section::Mutex<RefCell<Option<fn(cs: critical_section::CriticalSection<'_>, stop_entered: bool)>>> = critical_section::Mutex::new(RefCell::new(None));
+/// Callback function type for low-power idle events.
+///
+/// # Parameters
+///
+/// * `cs` - A [`CriticalSection`] token proving that interrupts are currently disabled.
+///   Use this to safely access other critical-section-protected resources.
+/// * `stop_entered` - `true` if the MCU successfully entered the low-power state,
+///   `false` if it was prevented from entering (e.g., due to a pending interrupt).
+///
+/// # Examples
+///
+/// ```ignore
+/// fn my\_pre\_wfi\_callback(cs: critical\_section::CriticalSection, stop\_entered: bool) {
+///     if stop\_entered {
+///         println!("Entering low-power mode");
+///     }
+/// }
+/// ```
+///
+/// [`CriticalSection`]: critical_section::CriticalSection
+type IdleCallback = fn(cs: critical_section::CriticalSection<'_>, stop_entered: bool);
 
+
+/// Stores the pre-WFI (Wait For Interrupt) callback function.
+///
+/// This callback is invoked **before** the MCU executes the `wfi` instruction
+/// to enter a low-power idle state such as deep sleep.
+///
+/// Access this only through [`init_callbacks`].
+#[cfg(feature = "low-power-idle-callbacks")]
+static PRE_WFI_CB : critical_section::Mutex<RefCell<Option<IdleCallback>>> = critical_section::Mutex::new(RefCell::new(None));
+
+/// Stores the post-WFI (Wait For Interrupt) callback function.
+///
+/// This callback is invoked **after** the MCU wakes from a low-power idle state,
+/// triggered by an interrupt or other wake event.
+///
+/// Access this only through [`init_callbacks`].
+#[cfg(feature = "low-power-idle-callbacks")]
+static POST_WFI_CB : critical_section::Mutex<RefCell<Option<IdleCallback>>> = critical_section::Mutex::new(RefCell::new(None));
+
+/// Registers callbacks to execute before and after entering a low-power idle state.
+///
+/// This function allows you to hook into the embassys power management,
+/// enabling custom initialization and cleanup when entering/exiting low-power modes
+/// such as deep sleep via the `wfi` instruction.
+///
+/// # Parameters
+///
+/// * `pre_wfi_cb` - Optional callback invoked **before** the MCU enters WFI.
+///   Pass `None` to skip pre-WFI processing.
+/// * `post_wfi_cb` - Optional callback invoked **after** the MCU wakes from WFI.
+///   Pass `None` to skip post-WFI processing.
+/// * `cs` - A [`CriticalSection`] token proving that interrupts are currently disabled.
+///   This ensures thread-safe access to the callback storage.
+///
+/// # Panics
+///
+/// This function does not panic. If the callbacks cannot be registered due to
+/// internal state issues, they will simply not be invoked.
+///
+/// # Examples
+///
+/// ```ignore
+/// use critical\_section::CriticalSection;
+///
+/// fn before\_sleep(cs: CriticalSection, stop\_entered: bool) {
+///     if stop\_entered {
+///         // Save peripheral state before entering deep sleep
+///         disable\_unused\_peripherals();
+///     }
+/// }
+///
+/// fn after\_sleep(cs: CriticalSection, stop\_entered: bool) {
+///     if stop\_entered {
+///         // Restore peripheral state after waking
+///         reinit\_clocks();
+///     }
+/// }
+///
+/// // Register both callbacks
+/// init\_callbacks(Some(before\_sleep), Some(after\_sleep), cs);
+/// ```
+///
+/// # Notes
+///
+/// * Callbacks execute within a critical section (interrupts disabled).
+///   Keep callback logic brief and fast to minimize interrupt latency.
+/// * The `stop_entered` parameter indicates whether the MCU actually entered
+///   the low-power state or was prevented from doing so.
+/// * This function is only available when the `"low-power-idle-callbacks"` feature is enabled.
+///
+/// [`CriticalSection`]: critical_section::CriticalSection
 #[cfg(feature = "low-power-idle-callbacks")]
 pub fn init_callbacks(pre_wfi_cb: Option<fn(cs: critical_section::CriticalSection<'_>, stop_entered: bool)>, post_wfi_cb: Option<fn(cs: critical_section::CriticalSection<'_>, stop_entered: bool)>, cs: CriticalSection<'_>)
 {

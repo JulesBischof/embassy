@@ -3,14 +3,13 @@
 #[cfg(feature = "low-power")]
 use core::cell::Cell;
 use core::cell::RefCell;
-use core::sync::atomic::{AtomicU32, AtomicBool, Ordering, compiler_fence};
+use core::sync::atomic::{AtomicU32, Ordering, compiler_fence};
 
 use critical_section::CriticalSection;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 #[cfg(feature = "low-power")]
-use embassy_time::Duration;
-use embassy_time_driver::{Driver, TICK_HZ, now};
+use embassy_time_driver::{Driver, TICK_HZ};
 use embassy_time_queue_utils::Queue;
 use stm32_metapac::timer::TimGp16;
 #[cfg(feature = "rt")]
@@ -160,6 +159,7 @@ impl RtcDriver {
         }
     }
 
+    #[cfg(feature = "low-power-allow-gearshifts")]
     pub(crate) fn update_frequency(&'static self, _: CriticalSection)
     {
         let r = regs_gp16();
@@ -418,6 +418,7 @@ pub(crate) fn init(cs: CriticalSection) {
     DRIVER.init(cs)
 }
 
+#[cfg(feature = "low-power-allow-gearshifts")]
 pub(crate) fn update_frequency(cs: CriticalSection) {
     DRIVER.update_frequency(cs)
 }

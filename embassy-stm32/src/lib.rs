@@ -283,8 +283,13 @@ pub struct Config {
     pub gearshift_slow_rcc: rcc::Config,
 
     #[cfg(feature = "low-power-idle-callbacks")]
+    /// Callback, that gets run right before entering calling wfi
+    /// None if no Callback shall be run
     pub pre_wfi_cb: Option<fn(cs: critical_section::CriticalSection<'_>, stop_entered: bool)>,
+    
     #[cfg(feature = "low-power-idle-callbacks")]
+    /// Callback, that gets run after waking up from wfi
+    /// None if no Callback shall be run
     pub post_wfi_cb: Option<fn(cs: critical_section::CriticalSection<'_>, stop_entered: bool)>,
 
     #[cfg(feature = "low-power")]
